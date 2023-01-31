@@ -78,7 +78,7 @@ impl Default for InlineDiagnosticsConfig {
     fn default() -> Self {
         InlineDiagnosticsConfig {
             cursor_line: SeverityFilter::AtLeast(Severity::Hint),
-            other_lines: SeverityFilter::AtLeast(Severity::Warning),
+            other_lines: SeverityFilter::AtLeast(Severity::Error),
             min_diagnostic_width: 40,
             prefix_len: 1,
             max_warp: 20,

@@ -120,6 +120,7 @@ rangeVariableTypes = true
 command = "rust-analyzer"
 
 [language-server.rust-analyzer.config]
+check.command = "clippy"
 inlayHints.bindingModeHints.enable = false
 inlayHints.closingBraceHints.minLines = 10
 inlayHints.closureReturnTypeHints.enable = "with_block"
