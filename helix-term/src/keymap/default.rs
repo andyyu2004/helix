@@ -89,7 +89,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "A-p" | "A-left" => select_prev_sibling,
         "A-n" | "A-right" => select_next_sibling,
         "A-e" => move_parent_node_end,
-        "A-b" => move_parent_node_start,
+        // "A-b" => move_parent_node_start,
+        "A-b" => make_search_word_bounded,
 
         "%" => select_all,
         "x" => extend_line_below,
