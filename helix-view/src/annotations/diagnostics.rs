@@ -23,6 +23,7 @@ impl SeverityFilter {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct InlineDiagnosticsConfig {
+    pub enabled: bool,
     pub cursor_line: SeverityFilter,
     pub other_lines: SeverityFilter,
     pub min_diagnostic_width: u16,
@@ -39,6 +40,9 @@ impl InlineDiagnosticsConfig {
     // (or inline diagnostics are displed) `None` is returned. In that case inline
     // diagnostics should not be shown
     pub fn enable(&self, width: u16) -> bool {
+        if !self.enabled {
+            return false;
+        }
         let disabled = matches!(
             self,
             Self {
@@ -77,8 +81,9 @@ impl InlineDiagnosticsConfig {
 impl Default for InlineDiagnosticsConfig {
     fn default() -> Self {
         InlineDiagnosticsConfig {
+            enabled: false,
             cursor_line: SeverityFilter::AtLeast(Severity::Hint),
-            other_lines: SeverityFilter::AtLeast(Severity::Error),
+            other_lines: SeverityFilter::AtLeast(Severity::Warning),
             min_diagnostic_width: 40,
             prefix_len: 1,
             max_warp: 20,
@@ -158,7 +163,7 @@ impl<'a> InlineDiagnosticAccumulator<'a> {
         }
 
         let Some(anchor_col) = grapheme.visual_pos.col.checked_sub(horizontal_off) else {
-            return true
+            return true;
         };
         if anchor_col >= width as usize {
             return true;

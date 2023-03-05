@@ -1,12 +1,11 @@
+use crate::doc_formatter::{FormattedGrapheme, TextFormat};
+use crate::syntax::Highlight;
+use crate::{softwrapped_dimensions, Tendril};
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::ptr::NonNull;
-
-use crate::doc_formatter::FormattedGrapheme;
-use crate::syntax::Highlight;
-use crate::Tendril;
 
 /// An inline annotation is continuous text shown
 /// on the screen before the grapheme that starts at
@@ -418,5 +417,37 @@ impl<'a> TextAnnotations<'a> {
             };
         }
         virtual_lines
+    }
+}
+
+pub struct CopilotLineAnnotation {
+    text: String,
+    row: usize,
+    view_width: u16,
+}
+
+impl CopilotLineAnnotation {
+    pub fn new(completion_text: String, completion_row: usize, view_width: u16) -> Self {
+        CopilotLineAnnotation {
+            text: completion_text,
+            row: completion_row,
+            view_width,
+        }
+    }
+}
+
+impl LineAnnotation for CopilotLineAnnotation {
+    fn insert_virtual_lines(
+        &mut self,
+        _line_end_char_idx: usize,
+        _vertical_off: usize,
+        _doc_line: usize,
+    ) -> usize {
+        if self.row != _doc_line {
+            return 0;
+        }
+        let mut text_fmt = TextFormat::default();
+        text_fmt.viewport_width = self.view_width;
+        return softwrapped_dimensions(self.text.as_str().into(), &text_fmt).0 - 1;
     }
 }

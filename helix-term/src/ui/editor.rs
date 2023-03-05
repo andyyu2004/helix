@@ -29,12 +29,13 @@ use helix_view::{
     info::Delay,
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
-    Document, Editor, Theme, View,
+    view, Document, Editor, Theme, View,
 };
 use std::{mem::take, num::NonZeroUsize, path::PathBuf, rc::Rc, sync::Arc};
 
 use tui::{buffer::Buffer as Surface, text::Span};
 
+use super::text_decorations::CopilotDecoration;
 use super::{completion::CompletionItem, statusline};
 
 pub struct EditorView {
@@ -206,6 +207,16 @@ impl EditorView {
                 theme,
                 primary_cursor,
                 config.lsp.inline_diagnostics.clone(),
+            ));
+        };
+
+        if let Some((text, pos)) = doc.copilot_state.lock().get_completion_text_and_pos() {
+            decorations.add_decoration(CopilotDecoration::new(
+                theme.get("ui.text.focused"),
+                doc.text().slice(..),
+                text.to_string(),
+                pos,
+                inner.width,
             ));
         }
         render_document(

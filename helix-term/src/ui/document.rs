@@ -131,7 +131,9 @@ pub fn render_text<'t>(
     let mut reached_view_top = false;
 
     loop {
-        let Some(mut grapheme) = formatter.next() else { break };
+        let Some(mut grapheme) = formatter.next() else {
+            break;
+        };
 
         // skip any graphemes on visual lines before the block start
         if grapheme.visual_pos.row < row_off {
@@ -163,6 +165,7 @@ pub fn render_text<'t>(
             // in that case we don't need to draw indent guides/virtual text
             if last_line_pos.doc_line != usize::MAX {
                 // draw indent guides for the last line
+                decorations.decorate_line(renderer, last_line_pos);
                 renderer.draw_indent_guides(last_line_indent_level, last_line_pos.visual_line);
                 is_in_indent_area = true;
                 decorations.render_virtual_lines(renderer, last_line_pos)
@@ -172,7 +175,6 @@ pub fn render_text<'t>(
                 doc_line: grapheme.line_idx,
                 visual_line: grapheme.visual_pos.row as u16,
             };
-            decorations.decorate_line(renderer, last_line_pos);
         }
 
         // acquire the correct grapheme style

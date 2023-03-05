@@ -32,7 +32,10 @@ use std::{
 };
 
 use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
     time::{sleep, Duration, Instant, Sleep},
 };
 
@@ -397,6 +400,7 @@ pub struct LspConfig {
     /// Also called "error lens"-style diagnostics, in reference to the popular VSCode extension.
     pub inline_diagnostics: InlineDiagnosticsConfig,
     pub display_diagnostic_message: bool,
+    pub copilot_auto: bool,
 }
 
 impl Default for LspConfig {
@@ -410,7 +414,8 @@ impl Default for LspConfig {
             snippets: true,
             goto_reference_include_declaration: true,
             inline_diagnostics: InlineDiagnosticsConfig::default(),
-            display_diagnostic_message: false,
+            display_diagnostic_message: true,
+            copilot_auto: true,
         }
     }
 }
@@ -747,7 +752,7 @@ pub struct WhitespaceCharacters {
 impl Default for WhitespaceCharacters {
     fn default() -> Self {
         Self {
-            space: '·',    // U+00B7
+            space: '·',   // U+00B7
             nbsp: '⍽',    // U+237D
             tab: '→',     // U+2192
             newline: '⏎', // U+23CE
@@ -966,6 +971,14 @@ pub struct Editor {
     /// times during rendering and should not be set by other functions.
     pub cursor_cache: CursorCache,
     pub handlers: Handlers,
+    /// When a new completion request is sent to the server old
+    /// unfinished request must be dropped. Each completion
+    /// request is associated with a channel that cancels
+    /// when the channel is dropped. That channel is stored
+    /// here. When a new completion request is sent this
+    /// field is set and any old requests are automatically
+    /// canceled as a result
+    pub completion_request_handle: Option<oneshot::Sender<()>>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1082,6 +1095,7 @@ impl Editor {
             needs_redraw: false,
             cursor_cache: CursorCache::default(),
             handlers,
+            completion_request_handle: None,
         }
     }
 
@@ -1836,6 +1850,9 @@ impl Editor {
             doc.set_selection(view.id, selection);
             doc.restore_cursor = false;
         }
+        let mut copilot_state = doc.copilot_state.lock();
+        copilot_state.exited_insert_mode();
+        copilot_state.reset_state();
     }
 
     pub fn current_stack_frame(&self) -> Option<&StackFrame> {

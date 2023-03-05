@@ -1,4 +1,5 @@
 mod client;
+pub mod copilot_types;
 pub mod file_event;
 pub mod jsonrpc;
 pub mod snippet;

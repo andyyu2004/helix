@@ -8,10 +8,10 @@ use crate::{
 };
 
 use helix_core::{
-    char_idx_at_visual_offset,
+    char_idx_at_visual_offset, coords_at_pos,
     doc_formatter::TextFormat,
     syntax::Highlight,
-    text_annotations::TextAnnotations,
+    text_annotations::{CopilotLineAnnotation, TextAnnotations},
     visual_offset_from_anchor, visual_offset_from_block, Position, RopeSlice, Selection,
     Transaction,
     VisualOffsetError::{PosAfterMaxRow, PosBeforeAnchorRow},
@@ -455,6 +455,16 @@ impl View {
                 self.offset.horizontal_offset,
                 config,
             ));
+        }
+
+        let copilot_state = doc.copilot_state.lock();
+        if let Some((text, pos)) = copilot_state.get_completion_text_and_pos() {
+            let row = coords_at_pos(doc.text().slice(..), pos).row;
+            text_annotations.add_line_annotation(Box::new(CopilotLineAnnotation::new(
+                text.to_string(),
+                row,
+                self.inner_width(doc),
+            )));
         }
 
         text_annotations

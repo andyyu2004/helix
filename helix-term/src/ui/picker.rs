@@ -1219,7 +1219,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicPi
         } else {
             self.query = Some(query);
 
-            Some(Instant::now() + Duration::from_millis(275))
+            Some(Instant::now() + Duration::from_millis(100))
         }
     }
 

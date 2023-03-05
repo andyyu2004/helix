@@ -4,6 +4,8 @@ use crate::{
     Call, Error, OffsetEncoding, Result,
 };
 
+use super::copilot_types;
+
 use helix_core::{find_workspace, path, syntax::LanguageServerFeature, ChangeSet, Rope};
 use helix_loader::{self, VERSION_AND_GIT_HASH};
 use lsp::{
@@ -1442,6 +1444,20 @@ impl Client {
         })
     }
 
+    pub fn copilot_completion(
+        &self,
+        document: copilot_types::Document,
+    ) -> Option<impl Future<Output = Result<Option<copilot_types::CompletionResponse>>>> {
+        let params = copilot_types::CompletionRequestParams { doc: document };
+        let request = self.call::<copilot_types::CompletionRequest>(params);
+
+        Some(async move {
+            let json = request.await?;
+            let response: Option<copilot_types::CompletionResponse> = serde_json::from_value(json)?;
+            log::error!("copilot reponse is {:?}", response);
+            Ok(response)
+        })
+    }
     pub fn command(&self, command: lsp::Command) -> Option<impl Future<Output = Result<Value>>> {
         let capabilities = self.capabilities.get().unwrap();
 

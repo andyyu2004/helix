@@ -364,6 +364,10 @@ impl MappableCommand {
         extend_to_line_end_newline, "Extend to line end",
         signature_help, "Show signature help",
         smart_tab, "Insert tab if all cursors have all whitespace to their left; otherwise, run a separate command.",
+        apply_copilot_completion, "Apply copilot completion",
+        show_or_next_copilot_completion, "Show or cycle forward copilot completion",
+        hide_or_prev_copilot_completion, "Hide or cycle backwards copilot completion",
+        toggle_copilot_auto, "Toggle automatic rendering of copilot completions",
         insert_tab, "Insert tab char",
         insert_newline, "Insert newline char",
         delete_char_backward, "Delete previous char",
@@ -2587,6 +2591,13 @@ fn ensure_selections_forward(cx: &mut Context) {
 }
 
 fn enter_insert_mode(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+
+    let mut copilot_state = doc.copilot_state.lock();
+    copilot_state.enterered_insert_mode();
+    copilot_state.reset_state();
+    doc.send_copilot_completion(view.id);
+
     cx.editor.mode = Mode::Insert;
 }
 
@@ -3494,6 +3505,26 @@ pub mod insert {
         }
 
         helix_event::dispatch(PostInsertChar { c, cx });
+    }
+
+    pub fn apply_copilot_completion(cx: &mut Context) {
+        let (view, doc) = current!(cx.editor);
+
+        let copilot_state = doc.copilot_state.lock();
+        if let Some(transaction) = copilot_state.get_transaction(doc.text()) {
+            drop(copilot_state);
+            doc.apply(&transaction, view.id);
+        }
+    }
+
+    pub fn show_or_next_copilot_completion(cx: &mut Context) {
+        let (_, doc) = current!(cx.editor);
+        doc.copilot_state.lock().show_or_increment_completion();
+    }
+
+    pub fn hide_or_prev_copilot_completion(cx: &mut Context) {
+        let (_, doc) = current!(cx.editor);
+        doc.copilot_state.lock().hide_or_decrement_completion();
     }
 
     pub fn smart_tab(cx: &mut Context) {
@@ -5651,4 +5682,9 @@ fn replay_macro(cx: &mut Context) {
         // replaying recursively.
         cx.editor.macro_replaying.pop();
     }));
+}
+
+fn toggle_copilot_auto(cx: &mut Context) {
+    let (_, doc) = current!(cx.editor);
+    doc.copilot_state.lock().toggle_auto();
 }
