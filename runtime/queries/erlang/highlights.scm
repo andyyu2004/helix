@@ -84,7 +84,7 @@
 ((attribute
    name: (atom) @keyword
    (stab_clause
-     pattern: (arguments (variable) @variable.parameter)
+     pattern: (arguments (variable)? @variable.parameter)
      body: (variable)? @variable.parameter))
  (#match? @keyword "(spec|callback)"))
 ; functions

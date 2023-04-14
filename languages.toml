@@ -1585,7 +1585,7 @@ language-servers = [ "erlang-ls" ]
 
 [[grammar]]
 name = "erlang"
-source = { git = "https://github.com/the-mikedavis/tree-sitter-erlang", rev = "ce0ed253d72c199ab93caba7542b6f62075339c4" }
+source = { git = "https://github.com/the-mikedavis/tree-sitter-erlang", rev = "bf56054c7c1bc66a27552b19702ffac8189ac7ec" }
 
 [[language]]
 name = "kotlin"
@@ -2515,7 +2515,7 @@ source = { git = "https://github.com/yuja/tree-sitter-qmljs", rev = "0b2b25bcaa7
 name = "mermaid"
 scope = "source.mermaid"
 injection-regex = "mermaid"
-file-types = ["mermaid"]
+file-types = ["mermaid", "mmd"]
 roots = []
 comment-token = "%%"
 indent = { tab-width = 4, unit = "    " }
