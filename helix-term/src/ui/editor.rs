@@ -864,7 +864,8 @@ impl EditorView {
                         commands::insert::insert_char(cx, ch)
                     }
                 }
-                KeymapResult::Cancelled(pending) => {
+                KeymapResult::Cancelled(mut pending) => {
+                    let last_evt = pending.pop().unwrap();
                     for ev in pending {
                         match ev.char() {
                             Some(ch) => commands::insert::insert_char(cx, ch),
@@ -876,6 +877,14 @@ impl EditorView {
                                 }
                             }
                         }
+                    }
+                    match self.handle_keymap_event(Mode::Insert, cx, last_evt) {
+                        Some(KeymapResult::NotFound) => {
+                            if let Some(ch) = last_evt.char() {
+                                commands::insert::insert_char(cx, ch)
+                            }
+                        }
+                        _ => (),
                     }
                 }
                 _ => unreachable!(),
