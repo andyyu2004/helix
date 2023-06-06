@@ -1,8 +1,9 @@
 //! LSP diagnostic utility types.
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Describes the severity level of a [`Diagnostic`].
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Severity {
     Hint,
     Info,
@@ -10,6 +11,39 @@ pub enum Severity {
     Error,
 }
 
+impl Serialize for Severity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match *self {
+            Severity::Hint => "hint",
+            Severity::Info => "info",
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Severity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let res = match String::deserialize(deserializer)?.as_str() {
+            "hint" => Severity::Hint,
+            "info" => Severity::Info,
+            "warning" => Severity::Warning,
+            "error" => Severity::Error,
+            _ => {
+                return Err(D::Error::custom(
+                    "expected \"hint\", \"info\", \"warning\" or \"error\"",
+                ))
+            }
+        };
+        Ok(res)
+    }
+}
 impl Default for Severity {
     fn default() -> Self {
         Self::Hint
@@ -21,6 +55,12 @@ impl Default for Severity {
 pub struct Range {
     pub start: usize,
     pub end: usize,
+}
+
+impl Range {
+    pub fn contains(self, pos: usize) -> bool {
+        (self.start..self.end).contains(&pos)
+    }
 }
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone, Deserialize, Serialize)]
@@ -47,4 +87,10 @@ pub struct Diagnostic {
     pub tags: Vec<DiagnosticTag>,
     pub source: Option<String>,
     pub data: Option<serde_json::Value>,
+}
+
+impl Diagnostic {
+    pub fn severity(&self) -> Severity {
+        self.severity.unwrap_or(Severity::Warning)
+    }
 }

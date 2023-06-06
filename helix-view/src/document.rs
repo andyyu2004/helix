@@ -7,7 +7,7 @@ use helix_core::auto_pairs::AutoPairs;
 use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
 use helix_core::syntax::{Highlight, LanguageServerFeature};
-use helix_core::text_annotations::{InlineAnnotation, TextAnnotations};
+use helix_core::text_annotations::InlineAnnotation;
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
 
 use ::parking_lot::Mutex;
@@ -94,7 +94,6 @@ impl Serialize for Mode {
         serializer.collect_str(self)
     }
 }
-
 /// A snapshot of the text of a document that we want to write out to disk
 #[derive(Debug, Clone)]
 pub struct DocumentSavedEvent {
@@ -1712,7 +1711,7 @@ impl Document {
         self.clear_diagnostics(language_server_id);
         self.diagnostics.append(&mut diagnostics);
         self.diagnostics
-            .sort_unstable_by_key(|diagnostic| diagnostic.range);
+            .sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.severity));
     }
 
     pub fn clear_diagnostics(&mut self, language_server_id: usize) {
@@ -1757,14 +1756,10 @@ impl Document {
                     .and_then(|soft_wrap| soft_wrap.wrap_at_text_width)
             })
             .or(config.soft_wrap.wrap_at_text_width)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && text_width as u16 > viewport_width;
         if soft_wrap_at_text_width {
-            // We increase max_line_len by 1 because softwrap considers the newline character
-            // as part of the line length while the "typical" expectation is that this is not the case.
-            // In particular other commands like :reflow do not count the line terminator.
-            // This is technically inconsistent for the last line as that line never has a line terminator
-            // but having the last visual line exceed the width by 1 seems like a rare edge case.
-            viewport_width = viewport_width.min(text_width as u16 + 1)
+            viewport_width = text_width as u16;
         }
         let config = self.config.load();
         let editor_soft_wrap = &config.soft_wrap;
@@ -1801,13 +1796,8 @@ impl Document {
             wrap_indicator_highlight: theme
                 .and_then(|theme| theme.find_scope_index("ui.virtual.wrap"))
                 .map(Highlight),
+            soft_wrap_at_text_width,
         }
-    }
-
-    /// Get the text annotations that apply to the whole document, those that do not apply to any
-    /// specific view.
-    pub fn text_annotations(&self, _theme: Option<&Theme>) -> TextAnnotations {
-        TextAnnotations::default()
     }
 
     /// Set the inlay hints for this document and `view_id`.
