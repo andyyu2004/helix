@@ -183,6 +183,7 @@ comment-token = "//"
 language-servers = [ "rust-analyzer" ]
 comment-tokens = ["//", "///", "//!"]
 indent = { tab-width = 4, unit = "    " }
+persistent-diagnostic-sources = ["rustc", "clippy"]
 
 [language.auto-pairs]
 '(' = ')'

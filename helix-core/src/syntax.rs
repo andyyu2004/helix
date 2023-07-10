@@ -160,6 +160,9 @@ pub struct LanguageConfiguration {
 
     /// If set, overrides rainbow brackets for a language.
     pub rainbow_brackets: Option<bool>,
+
+    #[serde(default)]
+    pub persistent_diagnostic_sources: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
