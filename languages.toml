@@ -25,6 +25,7 @@ elixir-ls = { command = "elixir-ls", config = { elixirLS.dialyzerEnabled = false
 elm-language-server = { command = "elm-language-server" }
 elvish = { command = "elvish", args = ["-lsp"] }
 erlang-ls = { command = "erlang_ls" }
+erlyzer = { command = "erlyzer" }
 forc = { command = "forc", args = ["lsp"] }
 forth-lsp = { command = "forth-lsp" }
 fortls = { command = "fortls", args = ["--lowercase_intrinsics"] }
@@ -1575,7 +1576,7 @@ shebangs = ["escript"]
 comment-token = "%%"
 comment-tokens = ["%%"]
 indent = { tab-width = 4, unit = "    " }
-language-servers = [ "erlang-ls" ]
+language-servers = [ { name = "erlyzer", only-features = ["document-symbols"] }, { name = "erlang-ls", except-features = ["document-symbols"] } ]
 
 [language.auto-pairs]
 '(' = ')'

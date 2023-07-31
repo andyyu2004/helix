@@ -38,7 +38,7 @@
 | elvish | ✓ |  |  |  | `elvish` |
 | env | ✓ |  |  |  |  |
 | erb | ✓ |  |  |  |  |
-| erlang | ✓ | ✓ |  | ✓ | `erlang_ls` |
+| erlang | ✓ | ✓ |  | ✓ | `erlyzer`, `erlang_ls` |
 | esdl | ✓ |  |  |  |  |
 | fish | ✓ | ✓ | ✓ |  |  |
 | forth | ✓ |  |  |  | `forth-lsp` |
