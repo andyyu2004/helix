@@ -94,7 +94,7 @@ command = "ansible-language-server"
 args = ["--stdio"]
 
 [language-server.lua-language-server]
-command = "lua-language-server" 
+command = "lua-language-server"
 
 [language-server.lua-language-server.config.Lua.hint]
 enable = true
