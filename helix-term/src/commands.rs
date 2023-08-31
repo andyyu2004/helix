@@ -23,7 +23,7 @@ use helix_core::{
     regex::{self, Regex, RegexBuilder},
     search::{self, CharMatcher},
     selection, shellwords, surround,
-    syntax::LanguageServerFeature,
+    syntax::{BlockCommentToken, LanguageServerFeature},
     text_annotations::TextAnnotations,
     textobject,
     tree_sitter::Node,
@@ -407,6 +407,8 @@ impl MappableCommand {
         completion, "Invoke completion popup",
         hover, "Show docs for item under cursor",
         toggle_comments, "Comment/uncomment selections",
+        toggle_line_comments, "Line comment/uncomment selections",
+        toggle_block_comments, "Block comment/uncomment selections",
         rotate_selections_forward, "Rotate selections forward",
         rotate_selections_backward, "Rotate selections backward",
         rotate_selection_contents_forward, "Rotate selection contents forward",
@@ -3130,7 +3132,11 @@ fn open(cx: &mut Context, open: Open) {
         text.push_str(&indent);
 
         let comment_len = if let Some(comment_token) = doc.language_config().and_then(|config| {
-            comment::continue_comment(doc.text(), cursor_line, &config.comment_tokens)
+            comment::continue_comment(
+                doc.text(),
+                cursor_line,
+                config.comment_tokens.as_deref().unwrap_or_default(),
+            )
         }) {
             text.push_str(comment_token);
             text.push(' ');
@@ -3682,7 +3688,10 @@ pub mod insert {
                     comment::continue_comment(
                         doc.text(),
                         current_line,
-                        &language_config.comment_tokens,
+                        language_config
+                            .comment_tokens
+                            .as_deref()
+                            .unwrap_or_default(),
                     )
                 };
 
@@ -4617,16 +4626,116 @@ pub fn completion(cx: &mut Context) {
 }
 
 // comments
-fn toggle_comments(cx: &mut Context) {
+type CommentTransactionFn = fn(
+    line_token: Option<&str>,
+    block_tokens: Option<&[BlockCommentToken]>,
+    doc: &Rope,
+    selection: &Selection,
+) -> Transaction;
+
+fn toggle_comments_impl(cx: &mut Context, comment_transaction: CommentTransactionFn) {
     let (view, doc) = current!(cx.editor);
-    let token = doc
+    let line_token: Option<&str> = doc
         .language_config()
-        .and_then(|lc| lc.comment_token.as_ref())
-        .map(|tc| tc.as_ref());
-    let transaction = comment::toggle_line_comments(doc.text(), doc.selection(view.id), token);
+        .and_then(|lc| lc.comment_tokens.as_ref())
+        .and_then(|tc| tc.first())
+        .map(|tc| tc.as_str());
+    let block_tokens: Option<&[BlockCommentToken]> = doc
+        .language_config()
+        .and_then(|lc| lc.block_comment_tokens.as_ref())
+        .map(|tc| &tc[..]);
+
+    let transaction =
+        comment_transaction(line_token, block_tokens, doc.text(), doc.selection(view.id));
 
     doc.apply(&transaction, view.id);
     exit_select_mode(cx);
+}
+
+fn toggle_comments(cx: &mut Context) {
+    toggle_comments_impl(cx, |line_token, block_tokens, doc, selection| {
+        let text = doc.slice(..);
+
+        // only have line comment tokens
+        if line_token.is_some() && block_tokens.is_none() {
+            return comment::toggle_line_comments(doc, selection, line_token);
+        }
+
+        let split_lines = comment::split_lines_of_selection(text, selection);
+
+        let default_block_tokens = &[BlockCommentToken::default()];
+        let block_comment_tokens = block_tokens.unwrap_or(default_block_tokens);
+
+        let (line_commented, line_comment_changes) =
+            comment::find_block_comments(block_comment_tokens, text, &split_lines);
+
+        // block commented by line would also be block commented so check this first
+        if line_commented {
+            return comment::create_block_comment_transaction(
+                doc,
+                &split_lines,
+                line_commented,
+                line_comment_changes,
+            )
+            .0;
+        }
+
+        let (block_commented, comment_changes) =
+            comment::find_block_comments(block_comment_tokens, text, selection);
+
+        // check if selection has block comments
+        if block_commented {
+            return comment::create_block_comment_transaction(
+                doc,
+                selection,
+                block_commented,
+                comment_changes,
+            )
+            .0;
+        }
+
+        // not commented and only have block comment tokens
+        if line_token.is_none() && block_tokens.is_some() {
+            return comment::create_block_comment_transaction(
+                doc,
+                &split_lines,
+                line_commented,
+                line_comment_changes,
+            )
+            .0;
+        }
+
+        // not block commented at all and don't have any tokens
+        comment::toggle_line_comments(doc, selection, line_token)
+    })
+}
+
+fn toggle_line_comments(cx: &mut Context) {
+    toggle_comments_impl(cx, |line_token, block_tokens, doc, selection| {
+        if line_token.is_none() && block_tokens.is_some() {
+            let default_block_tokens = &[BlockCommentToken::default()];
+            let block_comment_tokens = block_tokens.unwrap_or(default_block_tokens);
+            comment::toggle_block_comments(
+                doc,
+                &comment::split_lines_of_selection(doc.slice(..), selection),
+                block_comment_tokens,
+            )
+        } else {
+            comment::toggle_line_comments(doc, selection, line_token)
+        }
+    });
+}
+
+fn toggle_block_comments(cx: &mut Context) {
+    toggle_comments_impl(cx, |line_token, block_tokens, doc, selection| {
+        if line_token.is_some() && block_tokens.is_none() {
+            comment::toggle_line_comments(doc, selection, line_token)
+        } else {
+            let default_block_tokens = &[BlockCommentToken::default()];
+            let block_comment_tokens = block_tokens.unwrap_or(default_block_tokens);
+            comment::toggle_block_comments(doc, selection, block_comment_tokens)
+        }
+    });
 }
 
 fn rotate_selections(cx: &mut Context, direction: Direction) {
