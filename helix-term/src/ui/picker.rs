@@ -1169,8 +1169,8 @@ impl<T: Send + Sync + 'static, D: Send + Sync + 'static> Component for DynamicPi
         let current_query = self.file_picker.primary_query();
 
         if self.query != *current_query {
-            self.query.clone_from(current_query);
-            helix_event::send_blocking(&self.hook, current_query.clone());
+            self.query = current_query.to_string();
+            helix_event::send_blocking(&self.hook, self.query.clone());
         }
 
         event_result
