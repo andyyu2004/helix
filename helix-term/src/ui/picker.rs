@@ -1204,7 +1204,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicPi
         self.request.take();
         self.query = Some(query);
 
-        Some(Instant::now() + Duration::from_millis(400))
+        Some(Instant::now() + Duration::from_millis(325))
     }
 
     fn finish_debounce(&mut self) {
