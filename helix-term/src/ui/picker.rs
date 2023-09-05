@@ -2,7 +2,7 @@ use crate::{
     alt,
     compositor::{self, Component, Compositor, Context, Event, EventResult},
     ctrl,
-    job::Callback,
+    job::{dispatch_blocking, Callback},
     key, shift,
     ui::{
         self,
@@ -12,8 +12,10 @@ use crate::{
     },
 };
 use futures_util::{future::BoxFuture, FutureExt};
+use helix_event::AsyncHook;
 use nucleo::pattern::CaseMatching;
 use nucleo::{Config, Nucleo, Utf32String};
+use tokio::time::Instant;
 use tui::{
     buffer::Buffer as Surface,
     layout::Constraint,
@@ -32,6 +34,7 @@ use std::{
         atomic::{self, AtomicBool},
         Arc,
     },
+    time::Duration,
 };
 
 use crate::ui::{Prompt, PromptEvent};
@@ -161,7 +164,17 @@ impl<I, D> Clone for Injector<I, D> {
     }
 }
 
+#[derive(Debug)]
 pub struct InjectorShutdown;
+
+impl std::fmt::Display for InjectorShutdown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: better message
+        write!(f, "picker has been closed")
+    }
+}
+
+impl std::error::Error for InjectorShutdown {}
 
 impl<T, D> Injector<T, D> {
     pub fn push(&self, item: T) -> Result<(), InjectorShutdown> {
@@ -375,14 +388,6 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     pub fn with_line(mut self, line: String, editor: &Editor) -> Self {
         self.prompt.set_line(line, editor);
         self
-    }
-
-    pub fn set_options(&mut self, new_options: Vec<T>) {
-        self.matcher.restart(false);
-        let injector = self.matcher.injector();
-        for item in new_options {
-            inject_nucleo_item(&injector, &self.columns, item, &self.editor_data);
-        }
     }
 
     /// Move the cursor by a number of lines, either down (`Forward`) or up (`Backward`)
@@ -1080,9 +1085,12 @@ fn parse_query(
 
     for ch in input.chars() {
         match ch {
-            // Backslash escaping
+            // Backslash escaping for `%` and `"`
             '\\' => escaped = !escaped,
             _ if escaped => {
+                if ch != '%' && ch != '"' {
+                    text.push('\\');
+                }
                 text.push(ch);
                 escaped = false;
             }
@@ -1122,23 +1130,31 @@ fn parse_query(
 
 /// Returns a new list of options to replace the contents of the picker
 /// when called with the current picker query,
-pub type DynQueryCallback<T> =
-    Box<dyn Fn(String, &mut Editor) -> BoxFuture<'static, anyhow::Result<Vec<T>>>>;
+pub type DynQueryCallback<T, D> =
+    Box<dyn Fn(String, &mut Editor, &Injector<T, D>) -> BoxFuture<'static, anyhow::Result<()>>>;
 
 /// A picker that updates its contents via a callback whenever the
 /// query string changes. Useful for live grep, workspace symbols, etc.
 pub struct DynamicPicker<T: 'static + Send + Sync, D: 'static + Send + Sync> {
     file_picker: Picker<T, D>,
-    query_callback: DynQueryCallback<T>,
+    query_callback: DynQueryCallback<T, D>,
     query: String,
+    hook: tokio::sync::mpsc::Sender<String>,
 }
 
 impl<T: Send + Sync, D: Send + Sync> DynamicPicker<T, D> {
-    pub fn new(file_picker: Picker<T, D>, query_callback: DynQueryCallback<T>) -> Self {
+    pub fn new(file_picker: Picker<T, D>, query_callback: DynQueryCallback<T, D>) -> Self {
+        let hook: DynamicPickerHook<T, D> = DynamicPickerHook {
+            query: None,
+            request: None,
+            phantom_data: Default::default(),
+        };
+
         Self {
             file_picker,
             query_callback,
             query: String::new(),
+            hook: hook.spawn(),
         }
     }
 }
@@ -1152,29 +1168,12 @@ impl<T: Send + Sync + 'static, D: Send + Sync + 'static> Component for DynamicPi
         let event_result = self.file_picker.handle_event(event, cx);
         let current_query = self.file_picker.primary_query();
 
-        if !matches!(event, Event::IdleTimeout) || self.query == *current_query {
-            return event_result;
+        if self.query != *current_query {
+            self.query.clone_from(current_query);
+            helix_event::send_blocking(&self.hook, current_query.clone());
         }
 
-        self.query.clone_from(current_query);
-
-        let new_options = (self.query_callback)(current_query.to_owned(), cx.editor);
-
-        cx.jobs.callback(async move {
-            let new_options = new_options.await?;
-            let callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
-                // Wrapping of pickers in overlay is done outside the picker code,
-                // so this is fragile and will break if wrapped in some other widget.
-                let picker = match compositor.find_id::<Overlay<Self>>(ID) {
-                    Some(overlay) => &mut overlay.content.file_picker,
-                    None => return,
-                };
-                picker.set_options(new_options);
-                editor.reset_idle_timer();
-            }));
-            anyhow::Ok(callback)
-        });
-        EventResult::Consumed(None)
+        event_result
     }
 
     fn cursor(&self, area: Rect, ctx: &Editor) -> (Option<Position>, CursorKind) {
@@ -1187,6 +1186,46 @@ impl<T: Send + Sync + 'static, D: Send + Sync + 'static> Component for DynamicPi
 
     fn id(&self) -> Option<&'static str> {
         Some(ID)
+    }
+}
+
+struct DynamicPickerHook<T: 'static + Send + Sync, D: 'static + Send + Sync> {
+    query: Option<String>,
+    request: Option<helix_event::CancelTx>,
+    phantom_data: std::marker::PhantomData<(T, D)>,
+}
+
+impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicPickerHook<T, D> {
+    /// The new query line
+    type Event = String;
+
+    fn handle_event(&mut self, query: String, _timeout: Option<Instant>) -> Option<Instant> {
+        // Cancel any existing request by dropping the cancel sender.
+        self.request.take();
+        self.query = Some(query);
+
+        Some(Instant::now() + Duration::from_millis(400))
+    }
+
+    fn finish_debounce(&mut self) {
+        let Some(query) = self.query.take() else { return };
+        let (request, cancel) = helix_event::cancelation();
+        self.request = Some(request);
+
+        dispatch_blocking(move |editor, compositor| {
+            let Some(Overlay { content: dyn_picker, .. }) = compositor.find::<Overlay<DynamicPicker<T, D>>>() else {
+                return;
+            };
+            dyn_picker.file_picker.matcher.restart(false);
+            let injector = dyn_picker.file_picker.injector();
+            let get_options = (dyn_picker.query_callback)(query, editor, &injector);
+            tokio::spawn(async move {
+                if let Some(Err(err)) = helix_event::canceable_future(get_options, cancel).await {
+                    // TODO: better message
+                    log::error!("Failed to do dynamic request: {err}");
+                }
+            });
+        })
     }
 }
 
@@ -1255,6 +1294,12 @@ mod test {
             parse_query(columns, primary_column, "hello \\%field1:world"),
             hashmap!(
                 "primary" => "hello %field1:world".to_string(),
+            )
+        );
+        assert_eq!(
+            parse_query(columns, primary_column, "foo\\("),
+            hashmap!(
+                "primary" => "foo\\(".to_string(),
             )
         );
         assert_eq!(

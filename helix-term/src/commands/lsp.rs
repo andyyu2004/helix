@@ -411,6 +411,8 @@ pub fn symbol_picker(cx: &mut Context) {
 }
 
 pub fn workspace_symbol_picker(cx: &mut Context) {
+    use crate::ui::picker::Injector;
+
     let doc = doc!(cx.editor);
     if doc
         .language_servers_with_feature(LanguageServerFeature::WorkspaceSymbols)
@@ -422,7 +424,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
         return;
     }
 
-    let get_symbols = move |pattern: String, editor: &mut Editor| {
+    let get_symbols = move |pattern: String, editor: &mut Editor, injector: &Injector<_, _>| {
         let doc = doc!(editor);
         let mut seen_language_servers = HashSet::new();
         let mut futures: FuturesUnordered<_> = doc
@@ -434,7 +436,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
                 async move {
                     let json = request.await?;
 
-                    let response =
+                    let response: Vec<_> =
                         serde_json::from_value::<Option<Vec<lsp::SymbolInformation>>>(json)?
                             .unwrap_or_default()
                             .into_iter()
@@ -453,23 +455,60 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
             editor.set_error("No configured language server supports workspace symbols");
         }
 
+        let injector = injector.clone();
         async move {
-            let mut symbols = Vec::new();
             // TODO if one symbol request errors, all other requests are discarded (even if they're valid)
-            while let Some(mut lsp_items) = futures.try_next().await? {
-                symbols.append(&mut lsp_items);
+            while let Some(lsp_items) = futures.try_next().await? {
+                for item in lsp_items {
+                    injector.push(item)?;
+                }
             }
-            anyhow::Ok(symbols)
+            Ok(())
         }
         .boxed()
     };
 
-    let initial_symbols = get_symbols("".to_owned(), cx.editor);
+    let columns = vec![
+        ui::PickerColumn::new("kind", |item: &SymbolInformationItem, _| {
+            display_symbol_kind(item.symbol.kind).into()
+        }),
+        ui::PickerColumn::new("name", |item: &SymbolInformationItem, _| {
+            item.symbol.name.as_str().into()
+        })
+        .without_filtering(),
+        ui::PickerColumn::new("path", |item: &SymbolInformationItem, _| {
+            match item.symbol.location.uri.to_file_path() {
+                Ok(path) => path::get_relative_path(path.as_path())
+                    .to_string_lossy()
+                    .to_string()
+                    .into(),
+                Err(_) => item.symbol.location.uri.to_string().into(),
+            }
+        }),
+    ];
+    let (picker, injector) = Picker::stream(columns, ());
+    let initial_symbols = get_symbols("".to_owned(), cx.editor, &injector);
 
     cx.jobs.callback(async move {
-        let symbols = initial_symbols.await?;
+        initial_symbols.await?;
         let call = move |_editor: &mut Editor, compositor: &mut Compositor| {
-            let picker = sym_picker(symbols, true);
+            let picker = Picker::with_stream(
+                picker,
+                1, // name column
+                injector,
+                move |cx, item, action| {
+                    jump_to_location(
+                        cx.editor,
+                        &item.symbol.location,
+                        item.offset_encoding,
+                        action,
+                    );
+                },
+            )
+            .with_preview(move |_editor, item| {
+                Some(location_to_file_location(&item.symbol.location))
+            })
+            .truncate_start(false);
             let dyn_picker = DynamicPicker::new(picker, Box::new(get_symbols));
             compositor.push(Box::new(overlaid(dyn_picker)))
         };
