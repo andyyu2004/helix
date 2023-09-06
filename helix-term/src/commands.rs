@@ -87,16 +87,18 @@ impl<'a> Context<'a> {
     /// Push a new component onto the compositor.
     pub fn push_layer(&mut self, component: Box<dyn Component>) {
         self.callback
-            .push(Box::new(|compositor: &mut Compositor, _| {
-                compositor.push(component)
+            .push(Box::new(|compositor: &mut Compositor, cx| {
+                compositor.push(component);
+                cx.editor.reset_idle_timer();
             }));
     }
 
     /// Call `replace_or_push` on the Compositor
     pub fn replace_or_push_layer<T: Component>(&mut self, id: &'static str, component: T) {
         self.callback
-            .push(Box::new(move |compositor: &mut Compositor, _| {
+            .push(Box::new(move |compositor: &mut Compositor, cx| {
                 compositor.replace_or_push(id, component);
+                cx.editor.reset_idle_timer();
             }));
     }
 
