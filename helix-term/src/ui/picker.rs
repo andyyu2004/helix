@@ -252,6 +252,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     read_buffer: Vec<u8>,
     /// Given an item in the picker, return the file path and line number to display.
     file_fn: Option<FileCallback<T>>,
+
+    pub tmp_running: bool,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -360,6 +362,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_cache: HashMap::new(),
             read_buffer: Vec::with_capacity(1024),
             file_fn: None,
+            tmp_running: false,
         }
     }
 
@@ -646,7 +649,11 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
         let count = format!(
             "{}{}/{}",
-            if status.running { "(running) " } else { "" },
+            if status.running || self.tmp_running {
+                "(running) "
+            } else {
+                ""
+            },
             snapshot.matched_item_count(),
             snapshot.item_count(),
         );
@@ -1149,8 +1156,8 @@ pub struct DynamicPicker<T: 'static + Send + Sync, D: 'static + Send + Sync> {
 impl<T: Send + Sync, D: Send + Sync> DynamicPicker<T, D> {
     pub fn new(file_picker: Picker<T, D>, query_callback: DynQueryCallback<T, D>) -> Self {
         let hook: DynamicPickerHook<T, D> = DynamicPickerHook {
+            last_query: String::new(),
             query: None,
-            request: None,
             phantom_data: Default::default(),
         };
 
@@ -1194,8 +1201,8 @@ impl<T: Send + Sync + 'static, D: Send + Sync + 'static> Component for DynamicPi
 }
 
 struct DynamicPickerHook<T: 'static + Send + Sync, D: 'static + Send + Sync> {
+    last_query: String,
     query: Option<String>,
-    request: Option<helix_event::CancelTx>,
     phantom_data: std::marker::PhantomData<(T, D)>,
 }
 
@@ -1204,17 +1211,21 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicPi
     type Event = String;
 
     fn handle_event(&mut self, query: String, _timeout: Option<Instant>) -> Option<Instant> {
-        // Cancel any existing request by dropping the cancel sender.
-        self.request.take();
-        self.query = Some(query);
+        if query == self.last_query {
+            // If the search query reverts to the last one we requested, no need to
+            // make a new request.
+            self.query = None;
+            None
+        } else {
+            self.query = Some(query);
 
-        Some(Instant::now() + Duration::from_millis(325))
+            Some(Instant::now() + Duration::from_millis(325))
+        }
     }
 
     fn finish_debounce(&mut self) {
         let Some(query) = self.query.take() else { return };
-        let (request, cancel) = helix_event::cancelation();
-        self.request = Some(request);
+        self.last_query = query.clone();
 
         dispatch_blocking(move |editor, compositor| {
             let Some(Overlay { content: dyn_picker, .. }) = compositor.find::<Overlay<DynamicPicker<T, D>>>() else {
@@ -1226,13 +1237,22 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicPi
                 .version
                 .fetch_add(1, atomic::Ordering::Relaxed);
             dyn_picker.file_picker.matcher.restart(false);
+            dyn_picker.file_picker.tmp_running = true;
             let injector = dyn_picker.file_picker.injector();
             let get_options = (dyn_picker.query_callback)(query, editor, &injector);
             tokio::spawn(async move {
-                if let Some(Err(err)) = helix_event::canceable_future(get_options, cancel).await {
+                if let Err(err) = get_options.await {
                     // TODO: better message
                     log::error!("Failed to do dynamic request: {err}");
                 }
+
+                crate::job::dispatch(|editor, compositor| {
+                    let Some(Overlay { content: dyn_picker, .. }) = compositor.find::<Overlay<DynamicPicker<T, D>>>() else {
+                        return;
+                    };
+                    dyn_picker.file_picker.tmp_running = false;
+                    editor.reset_idle_timer();
+                }).await;
             });
         })
     }
