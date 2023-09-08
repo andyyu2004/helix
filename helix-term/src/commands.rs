@@ -2134,161 +2134,144 @@ fn global_search(cx: &mut Context) {
     cx.editor.registers.last_search_register = reg;
 
     let columns = vec![
-        PickerColumn::new(
-            "path",
-            |item: &FileResult, current_path: &Option<PathBuf>| {
-                let relative_path = helix_core::path::get_relative_path(&item.path)
-                    .to_string_lossy()
-                    .into_owned();
-                if current_path
-                    .as_ref()
-                    .map(|p| p == &item.path)
-                    .unwrap_or(false)
-                {
-                    format!("{} (*)", relative_path).into()
-                } else {
-                    relative_path.into()
-                }
-            },
-        ),
+        PickerColumn::new("path", |item: &FileResult, _| {
+            helix_core::path::get_relative_path(&item.path)
+                .to_string_lossy()
+                .into_owned()
+                .into()
+        }),
         PickerColumn::new("contents", |item: &FileResult, _| {
             item.line_content.as_str().into()
         })
         .without_filtering(),
     ];
-    let current_path = doc_mut!(cx.editor).path().cloned();
-    let (picker, injector) = Picker::stream(columns, current_path);
+    let (picker, injector) = Picker::stream(columns, ());
 
-    let get_files =
-        move |query: String,
-              editor: &mut Editor,
-              injector: &ui::picker::Injector<FileResult, Option<PathBuf>>| {
-            if query.is_empty() {
-                return async { Ok(()) }.boxed();
+    let get_files = move |query: String,
+                          editor: &mut Editor,
+                          injector: &ui::picker::Injector<_, _>| {
+        if query.is_empty() {
+            return async { Ok(()) }.boxed();
+        }
+
+        let search_root = helix_loader::current_working_dir();
+        if !search_root.exists() {
+            return async { Err(anyhow::anyhow!("Current working directory does not exist")) }
+                .boxed();
+        }
+
+        let documents: Vec<_> = editor
+            .documents()
+            .map(|doc| (doc.path().cloned(), doc.text().to_owned()))
+            .collect();
+
+        let matcher = match RegexMatcherBuilder::new()
+            .case_smart(smart_case)
+            .build(&query)
+        {
+            Ok(matcher) => {
+                // Clear any "Failed to compile regex" errors out of the statusline.
+                editor.clear_status();
+                matcher
             }
-
-            let search_root = helix_loader::current_working_dir();
-            if !search_root.exists() {
-                return async { Err(anyhow::anyhow!("Current working directory does not exist")) }
-                    .boxed();
+            Err(err) => {
+                log::info!("Failed to compile search pattern in global search: {}", err);
+                return async { Err(anyhow::anyhow!("Failed to compile regex")) }.boxed();
             }
-
-            let documents: Vec<_> = editor
-                .documents()
-                .map(|doc| (doc.path().cloned(), doc.text().to_owned()))
-                .collect();
-
-            let matcher = match RegexMatcherBuilder::new()
-                .case_smart(smart_case)
-                .build(&query)
-            {
-                Ok(matcher) => {
-                    // Clear any "Failed to compile regex" errors out of the statusline.
-                    editor.clear_status();
-                    matcher
-                }
-                Err(err) => {
-                    log::info!("Failed to compile search pattern in global search: {}", err);
-                    return async { Err(anyhow::anyhow!("Failed to compile regex")) }.boxed();
-                }
-            };
-
-            let dedup_symlinks = file_picker_config.deduplicate_links;
-            let absolute_root = search_root
-                .canonicalize()
-                .unwrap_or_else(|_| search_root.clone());
-
-            let injector = injector.clone();
-            async move {
-                let searcher = SearcherBuilder::new()
-                    .binary_detection(BinaryDetection::quit(b'\x00'))
-                    .build();
-                WalkBuilder::new(search_root)
-                    .hidden(file_picker_config.hidden)
-                    .parents(file_picker_config.parents)
-                    .ignore(file_picker_config.ignore)
-                    .follow_links(file_picker_config.follow_symlinks)
-                    .git_ignore(file_picker_config.git_ignore)
-                    .git_global(file_picker_config.git_global)
-                    .git_exclude(file_picker_config.git_exclude)
-                    .max_depth(file_picker_config.max_depth)
-                    .filter_entry(move |entry| {
-                        filter_picker_entry(entry, &absolute_root, dedup_symlinks)
-                    })
-                    .build_parallel()
-                    .run(|| {
-                        let mut searcher = searcher.clone();
-                        let matcher = matcher.clone();
-                        let injector = injector.clone();
-                        let documents = &documents;
-                        Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
-                            let entry = match entry {
-                                Ok(entry) => entry,
-                                Err(_) => return WalkState::Continue,
-                            };
-
-                            match entry.file_type() {
-                                Some(entry) if entry.is_file() => {}
-                                // skip everything else
-                                _ => return WalkState::Continue,
-                            };
-
-                            let mut stop = false;
-                            let sink = sinks::UTF8(|line_num, line_content| {
-                                stop = injector
-                                    .push(FileResult::new(
-                                        entry.path(),
-                                        line_num as usize - 1,
-                                        line_content.to_string(),
-                                    ))
-                                    .is_err();
-
-                                Ok(!stop)
-                            });
-                            let doc = documents.iter().find(|&(doc_path, _)| {
-                                doc_path
-                                    .as_ref()
-                                    .map_or(false, |doc_path| doc_path == entry.path())
-                            });
-
-                            let result = if let Some((_, doc)) = doc {
-                                // there is already a buffer for this file
-                                // search the buffer instead of the file because it's faster
-                                // and captures new edits without requiring a save
-                                if searcher.multi_line_with_matcher(&matcher) {
-                                    // in this case a continous buffer is required
-                                    // convert the rope to a string
-                                    let text = doc.to_string();
-                                    searcher.search_slice(&matcher, text.as_bytes(), sink)
-                                } else {
-                                    searcher.search_reader(
-                                        &matcher,
-                                        RopeReader::new(doc.slice(..)),
-                                        sink,
-                                    )
-                                }
-                            } else {
-                                searcher.search_path(&matcher, entry.path(), sink)
-                            };
-
-                            if let Err(err) = result {
-                                log::error!(
-                                    "Global search error: {}, {}",
-                                    entry.path().display(),
-                                    err
-                                );
-                            }
-                            if stop {
-                                WalkState::Quit
-                            } else {
-                                WalkState::Continue
-                            }
-                        })
-                    });
-                Ok(())
-            }
-            .boxed()
         };
+
+        let dedup_symlinks = file_picker_config.deduplicate_links;
+        let absolute_root = search_root
+            .canonicalize()
+            .unwrap_or_else(|_| search_root.clone());
+
+        let injector = injector.clone();
+        async move {
+            let searcher = SearcherBuilder::new()
+                .binary_detection(BinaryDetection::quit(b'\x00'))
+                .build();
+            WalkBuilder::new(search_root)
+                .hidden(file_picker_config.hidden)
+                .parents(file_picker_config.parents)
+                .ignore(file_picker_config.ignore)
+                .follow_links(file_picker_config.follow_symlinks)
+                .git_ignore(file_picker_config.git_ignore)
+                .git_global(file_picker_config.git_global)
+                .git_exclude(file_picker_config.git_exclude)
+                .max_depth(file_picker_config.max_depth)
+                .filter_entry(move |entry| {
+                    filter_picker_entry(entry, &absolute_root, dedup_symlinks)
+                })
+                .build_parallel()
+                .run(|| {
+                    let mut searcher = searcher.clone();
+                    let matcher = matcher.clone();
+                    let injector = injector.clone();
+                    let documents = &documents;
+                    Box::new(move |entry: Result<DirEntry, ignore::Error>| -> WalkState {
+                        let entry = match entry {
+                            Ok(entry) => entry,
+                            Err(_) => return WalkState::Continue,
+                        };
+
+                        match entry.file_type() {
+                            Some(entry) if entry.is_file() => {}
+                            // skip everything else
+                            _ => return WalkState::Continue,
+                        };
+
+                        let mut stop = false;
+                        let sink = sinks::UTF8(|line_num, line_content| {
+                            stop = injector
+                                .push(FileResult::new(
+                                    entry.path(),
+                                    line_num as usize - 1,
+                                    line_content.to_string(),
+                                ))
+                                .is_err();
+
+                            Ok(!stop)
+                        });
+                        let doc = documents.iter().find(|&(doc_path, _)| {
+                            doc_path
+                                .as_ref()
+                                .map_or(false, |doc_path| doc_path == entry.path())
+                        });
+
+                        let result = if let Some((_, doc)) = doc {
+                            // there is already a buffer for this file
+                            // search the buffer instead of the file because it's faster
+                            // and captures new edits without requiring a save
+                            if searcher.multi_line_with_matcher(&matcher) {
+                                // in this case a continous buffer is required
+                                // convert the rope to a string
+                                let text = doc.to_string();
+                                searcher.search_slice(&matcher, text.as_bytes(), sink)
+                            } else {
+                                searcher.search_reader(
+                                    &matcher,
+                                    RopeReader::new(doc.slice(..)),
+                                    sink,
+                                )
+                            }
+                        } else {
+                            searcher.search_path(&matcher, entry.path(), sink)
+                        };
+
+                        if let Err(err) = result {
+                            log::error!("Global search error: {}, {}", entry.path().display(), err);
+                        }
+                        if stop {
+                            WalkState::Quit
+                        } else {
+                            WalkState::Continue
+                        }
+                    })
+                });
+            Ok(())
+        }
+        .boxed()
+    };
 
     cx.jobs.callback(async move {
         let call = move |_: &mut Editor, compositor: &mut Compositor| {
