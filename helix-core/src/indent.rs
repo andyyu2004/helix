@@ -477,7 +477,7 @@ fn query_indents(
         // The row/column position of the optional anchor in this query
         let mut anchor: Option<tree_sitter::Node> = None;
         for capture in m.captures {
-            let capture_name = query.capture_names()[capture.index as usize].as_str();
+            let capture_name = query.capture_names()[capture.index as usize];
             let capture_type = match capture_name {
                 "indent" => IndentCaptureType::Indent,
                 "indent.always" => IndentCaptureType::IndentAlways,
