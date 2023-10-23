@@ -240,6 +240,11 @@ fn diag_picker(
         flat_diag.reserve(diags.len());
 
         for (diag, ls) in diags {
+            // low number is high severity weirdly enough
+            if diag.severity > Some(DiagnosticSeverity::WARNING) {
+                continue;
+            }
+
             if let Some(ls) = cx.editor.language_server_by_id(ls) {
                 flat_diag.push(PickerDiagnostic {
                     url: url.clone(),
